@@ -50,7 +50,7 @@ final class ObjectCaptureModel: ObservableObject, ObjectCaptureSessionDelegate {
                 for await output in pg.outputs {
                     if case .requestComplete(let request, let result) = output,
                        case .modelFile = request {
-                        if case .success = result {
+                        if case .complete = result {
                             DispatchQueue.main.async { self.modelURL = out; self.stateText = "FERTIG: model.usdz" }
                         }
                     }
