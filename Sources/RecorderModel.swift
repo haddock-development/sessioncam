@@ -16,7 +16,15 @@ final class RecorderModel: ObservableObject {
 
     func saveFloorplan(room: CapturedRoom) -> String {
         func surf(_ s: CapturedRoom.Surface) -> [String: Any] {
-            let m = s.transform
+            genericSurf(s.dimensions, s.transform, conf: s.confidence.rawValue)
+        }
+        func surfObj(_ o: CapturedRoom.Object) -> [String: Any] {
+            var d = genericSurf(o.dimensions, o.transform, conf: o.confidence.rawValue)
+            d["category"] = "\(o.category)"
+            return d
+        }
+        func genericSurf(_ dims: simd_float3, _ m: simd_float4x4, conf: Int) -> [String: Any] {
+            let m = m
             let v: [Float] = [
                 m.columns.0.x, m.columns.1.x, m.columns.2.x, m.columns.3.x,
                 m.columns.0.y, m.columns.1.y, m.columns.2.y, m.columns.3.y,

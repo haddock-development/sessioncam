@@ -5,24 +5,32 @@ import SwiftUI
 struct RoomCaptureUIView: UIViewRepresentable {
     @Binding var capturedRoom: CapturedRoom?
     @Binding var scanning: Bool
+    @Binding var stopRequested: Bool
 
     func makeUIView(context: Context) -> RoomCaptureView {
         let view = RoomCaptureView(frame: .zero)
-        let session = RoomCaptureSession()
-        view.session = session
+        let session = view.session
+        context.coordinator.session = session
         session.delegate = context.coordinator
         context.coordinator.captureView = view
         session.run(configuration: context.coordinator.config)
         return view
     }
 
-    func updateUIView(_ uiView: RoomCaptureView, context: Context) {}
+    func updateUIView(_ uiView: RoomCaptureView, context: Context) {
+        if stopRequested && !context.coordinator.stopped {
+            context.coordinator.stopped = true
+            context.coordinator.session?.stop()
+        }
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     final class Coordinator: NSObject, RoomCaptureSessionDelegate {
-        let config = RoomCaptureSessionConfig()
+        let config = RoomCaptureSession.Configuration()
+        weak var session: RoomCaptureSession?
         weak var captureView: RoomCaptureView?
+        var stopped = false
         var parent: RoomCaptureUIView
 
         init(_ parent: RoomCaptureUIView) { self.parent = parent }
@@ -41,13 +49,14 @@ struct RoomPlanScreen: View {
     @State private var capturedRoom: CapturedRoom?
     @State private var scanning = true
     @State private var saved = ""
+    @State private var stopRequested = false
 
     var body: some View {
         VStack(spacing: 0) {
             if capturedRoom == nil {
-                RoomCaptureUIView(capturedRoom: $capturedRoom, scanning: $scanning)
+                RoomCaptureUIView(capturedRoom: $capturedRoom, scanning: $scanning, stopRequested: $stopRequested)
                     .ignoresSafeArea()
-                Button("Scan beenden") { model.roomSession?.stop() }
+                Button("Scan beenden") { stopRequested = true }
                     .padding(8).background(.black.opacity(0.6)).foregroundColor(.white).cornerRadius(10)
                     .padding(.bottom, 12)
             } else {
