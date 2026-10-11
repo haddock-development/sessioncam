@@ -8,8 +8,8 @@ struct RoomCaptureUIView: UIViewRepresentable {
     @Binding var stopRequested: Bool
 
     func makeUIView(context: Context) -> UIView {
-        let view = RoomCaptureView(frame: .zero)
-        let session = view.session
+        let view = UIView(frame: .zero)
+        let session = RoomCaptureSession()
         context.coordinator.session = session
         session.delegate = context.coordinator
         session.run(configuration: context.coordinator.config)
@@ -28,11 +28,14 @@ struct RoomCaptureUIView: UIViewRepresentable {
     final class Coordinator: NSObject, RoomCaptureSessionDelegate {
         let config = RoomCaptureSession.Configuration()
         weak var session: RoomCaptureSession?
-        weak var session: RoomCaptureSession?
         var stopped = false
         var parent: RoomCaptureUIView
 
         init(_ parent: RoomCaptureUIView) { self.parent = parent }
+
+        func captureSession(_ session: RoomCaptureSession, didUpdate capturedRoom: CapturedRoom) {
+            DispatchQueue.main.async { self.parent.capturedRoom = capturedRoom }
+        }
 
         func captureSession(_ session: RoomCaptureSession, didEndWith capturedRoom: CapturedRoom?, error: Error?) {
             DispatchQueue.main.async {
