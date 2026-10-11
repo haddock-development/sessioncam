@@ -25,6 +25,8 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
 
     private let ioQueue = DispatchQueue(label: "de.indoorcapture.sessioncam.io", qos: .userInitiated)
     private let motion = CMMotionManager()
+    private let motionQueue = OperationQueue()
+    private var previewRunning = false
 
     let arSession = ARSession()
 
@@ -60,13 +62,14 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
 
     // Session fuer Vorschau permanent laufen lassen (auch vor/ohne REC)
     func runPreview() {
-        guard session?.running != true else { return }
+        guard !previewRunning else { return }
         let config = ARWorldTrackingConfiguration()
         config.frameSemantics = [.sceneDepth]
         config.worldAlignment = .gravity
         config.environmentTexturing = .none
         arSession.delegate = self
         arSession.run(config)
+        previewRunning = true
     }
 
     func start(ort: String, zimmer: String, onStats: @escaping (Stats) -> Void) -> URL? {
@@ -96,9 +99,9 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
         FileManager.default.createFile(atPath: imuURL.path, contents: Data("t,gx,gy,gz,ax,ay,az\n".utf8))
         imuHandle = try? FileHandle(forWritingTo: imuURL)
         imuIndex = 0
-        motion.deviceMotionUpdateFrequency = 100
+        motion.deviceMotionUpdateInterval = 100
         if motion.isDeviceMotionAvailable {
-            motion.startDeviceMotionUpdates(to: ioQueue) { [weak self] dm, _ in
+            motion.startDeviceMotionUpdates(to: motionQueue) { [weak self] dm, _ in
                 guard let self, self.isRecording, let dm, let h = self.imuHandle else { return }
                 self.imuIndex += 1
                 let line = String(format: "%.6f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f\n",
