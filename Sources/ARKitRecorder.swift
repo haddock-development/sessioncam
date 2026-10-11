@@ -2,11 +2,29 @@ import ARKit
 import AVFoundation
 import CoreMotion
 import Foundation
+import SceneKit
 import UIKit
 
-/// sessioncam-v2: RGB-Video + LiDAR-Depth + Confidence + Posen + Intrinsics + Raw-IMU
-/// Live: Tempo, Tracking-State, Loop-Gap. Geteilte ARSession fuer Vorschau.
+/// sessioncam-v3: RGB + LiDAR-Depth + Confidence + Posen + Intrinsics + Raw-IMU
+/// Live: Tempo, Tracking (+Guete-%), Loop-Gap, Punktewolke, Checkliste. Pause/Resume.
 final class ARKitRecorder: NSObject, ARSessionDelegate {
+
+    struct Checklist {
+        var pan = false
+        var perimeter = false
+        var diagonal = false
+        var loop = false
+        var loopSuggested = false
+        var active: [String] { ["pan", "perimeter", "diagonal", "loop"].filter { item in
+            switch item {
+            case "pan": return pan
+            case "perimeter": return perimeter
+            case "diagonal": return diagonal
+            case "loop": return loop
+            default: return false
+            }
+        } }
+    }
 
     struct Stats {
         var isRecording = false
@@ -20,15 +38,19 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
         var loopGapM: Double = -1
         var elapsed: Double = 0
         var trackingText = "INITIALISIERE"
+        var qualityPct: Double = -1
+        var cloudPoints = 0
         var statusText = ""
     }
 
     private let ioQueue = DispatchQueue(label: "de.indoorcapture.sessioncam.io", qos: .userInitiated)
+    private let cloudQueue = DispatchQueue(label: "de.indoorcapture.sessioncam.cloud", qos: .utility)
+    private let cloudLock = NSLock()
     private let motion = CMMotionManager()
     private let motionQueue = OperationQueue()
-    private var previewRunning = false
 
     let arSession = ARSession()
+    let cloudNode = SCNNode()
 
     private var sessionDir: URL?
     private var depthDir: URL?
@@ -57,10 +79,21 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
     private var lastTrackingRaw = ""
     private var onStats: ((Stats) -> Void)?
 
+    // Qualitaets-Timeline (B)
+    private var tqNormal = 0, tqExcessive = 0, tqFeatures = 0, tqReloc = 0, tqInit = 0, tqNA = 0
+
+    // Live-Punktewolke (A)
+    private var cloudPoints: [SIMD3<Float>] = []
+    private let maxCloudPoints = 90000
+    private var lastCloudPush: Double = 0
+
+    // Checkliste (C)
+    private var checklist = Checklist()
+
     var isRecording = false
     var currentStats: Stats { lastStats }
+    var currentChecklist: Checklist { checklist }
 
-    // Session fuer Vorschau permanent laufen lassen (auch vor/ohne REC)
     func runPreview() {
         guard !previewRunning else { return }
         let config = ARWorldTrackingConfiguration()
@@ -99,10 +132,10 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
         FileManager.default.createFile(atPath: imuURL.path, contents: Data("t,gx,gy,gz,ax,ay,az\n".utf8))
         imuHandle = try? FileHandle(forWritingTo: imuURL)
         imuIndex = 0
-        motion.deviceMotionUpdateInterval = 100
+        motion.deviceMotionUpdateInterval = 1.0 / 100.0
         if motion.isDeviceMotionAvailable {
             motion.startDeviceMotionUpdates(to: motionQueue) { [weak self] dm, _ in
-                guard let self, self.isRecording, let dm, let h = self.imuHandle else { return }
+                guard let self, self.isRecording, !self.paused, let dm, let h = self.imuHandle else { return }
                 self.imuIndex += 1
                 let line = String(format: "%.6f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f\n",
                                   dm.timestamp, dm.rotationRate.x, dm.rotationRate.y, dm.rotationRate.z,
@@ -122,11 +155,26 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
         startTime = 0
         speedEMA = 0
         pathLength = 0
+        cloudLock.lock()
+        cloudPoints.removeAll()
+        cloudLock.unlock()
+        tqNormal = 0; tqExcessive = 0; tqFeatures = 0; tqReloc = 0; tqInit = 0; tqNA = 0
+        checklist = Checklist()
         isRecording = true
 
         UIApplication.shared.isIdleTimerDisabled = true
         pushStats(Stats(isRecording: true, statusText: "REC"))
         return dir
+    }
+
+    func tick(_ item: String) {
+        switch item {
+        case "pan": checklist.pan = true
+        case "perimeter": checklist.perimeter = true
+        case "diagonal": checklist.diagonal = true
+        case "loop": checklist.loop = true
+        default: break
+        }
     }
 
     func pause() {
@@ -168,9 +216,8 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
         if startTime == 0 { startTime = ts; virtualTs = 0; lastRealTs = ts }
         let dt = ts - lastRealTs
         lastRealTs = ts
-        if !paused && isRecording { virtualTs += dt }
+        if isRecording && !paused { virtualTs += dt }
 
-        // Tracking-State (auch ohne REC -> Vorschau-Badge)
         let tracking = trackingText(frame.camera.trackingState)
         let cam = frame.camera
         let t = cam.transform
@@ -178,8 +225,32 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
         if startPos == nil { startPos = pos }
         let loopGap: Double = (isRecording && startPos != nil) ? Double(distance(pos, startPos!)) : -1
 
+        if isRecording && !paused {
+            switch frame.camera.trackingState {
+            case .normal: tqNormal += 1
+            case .limited(.excessiveMotion): tqExcessive += 1
+            case .limited(.insufficientFeatures): tqFeatures += 1
+            case .limited(.relocalizing): tqReloc += 1
+            case .limited(.initializing): tqInit += 1
+            case .notAvailable: tqNA += 1
+            @unknown default: break
+            }
+        }
+
+        // Live-Punktewolke (A): jede 3. Frame, downsampled, verlustfrei im Ring
+        if isRecording && !paused, frameIndex % 3 == 0, let sd = frame.sceneDepth {
+            let dm = sd.depthMap
+            let intr = cam.intrinsics
+            let pose = t
+            let w0 = CVPixelBufferGetWidth(frame.capturedImage)
+            let h0 = CVPixelBufferGetHeight(frame.capturedImage)
+            cloudQueue.async { [weak self] in
+                self?.accumulateCloud(dm, intr: intr, pose: pose, ts: ts, w0: w0, h0: h0)
+            }
+        }
+
         guard isRecording, !paused else {
-            if lastTrackingRaw != tracking || !isRecording {
+            if lastTrackingRaw != tracking {
                 lastTrackingRaw = tracking
                 var s = lastStats
                 s.trackingText = tracking
@@ -203,8 +274,8 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
             let dm = sd.depthMap
             let cm = sd.confidenceMap
             ioQueue.async {
-                Self.writeDepth(dm, to: dir.appendingPathComponent(depthName + ".f32"))
-                if let cm { Self.writeConf(cm, to: dir.appendingPathComponent(depthName + ".conf")) }
+                Self.writeRaw(dm, to: dir.appendingPathComponent(depthName + ".f32"))
+                if let cm { Self.writeRaw(cm, to: dir.appendingPathComponent(depthName + ".conf")) }
             }
         }
 
@@ -214,6 +285,11 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
             speedEMA = 0.75 * speedEMA + 0.25 * min(Double(d) / dt, 5.0)
         }
         lastPos = pos
+
+        // Auto-Vorschlag: LOOP-Tick, sobald wir nah am Start sind (C)
+        if loopGap >= 0 && loopGap < 0.35 && !checklist.loop && frameIndex > 30 {
+            checklist.loopSuggested = true
+        }
 
         let i = cam.intrinsics
         let ref = frame.capturedImage
@@ -231,12 +307,93 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
         appendVideo(frame: frame, ts: virtualTs)
 
         if frameIndex % 6 == 0 {
+            let total = tqNormal + tqExcessive + tqFeatures + tqReloc + tqInit + tqNA
+            let q = total > 0 ? Double(tqNormal) / Double(total) * 100.0 : -1
             pushStats(Stats(isRecording: true, isPaused: false,
                             frames: frameIndex, depthFrames: depthIndex, imuSamples: imuIndex,
                             droppedVideoFrames: dropped, speedMps: speedEMA,
                             pathLength: pathLength, loopGapM: loopGap,
-                            elapsed: virtualTs - startTime, trackingText: tracking, statusText: "REC"))
+                            elapsed: virtualTs - startTime, trackingText: tracking,
+                            qualityPct: q, cloudPoints: cloudPointCount(), statusText: "REC"))
         }
+    }
+
+    // MARK: - Live-Punktewolke (A)
+
+    private func accumulateCloud(_ dm: CVPixelBuffer, intr: simd_float3x3, pose: simd_float4x4, ts: Double, w0: Int, h0: Int) {
+        CVPixelBufferLockBaseAddress(dm, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(dm, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(dm) else { return }
+        let dw = CVPixelBufferGetWidth(dm)
+        let dh = CVPixelBufferGetHeight(dm)
+        let bpr = CVPixelBufferGetBytesPerRow(dm)
+        let p = base.assumingMemoryBound(to: Float.self)
+        let fx = intr.columns.0.x * Float(dw) / Float(w0)
+        let fy = intr.columns.1.y * Float(dh) / Float(h0)
+        let cx = intr.columns.2.x * Float(dw) / Float(w0)
+        let cy = intr.columns.2.y * Float(dh) / Float(h0)
+        let m = pose
+        var fresh: [SIMD3<Float>] = []
+        fresh.reserveCapacity((dw / 8) * (dh / 8))
+        for v in stride(from: 0, to: dh, by: 8) {
+            for u in stride(from: 0, to: dw, by: 8) {
+                let z = p[v * (bpr / 4) + u]
+                if z <= 0.1 || z > 5.0 { continue }
+                let x = (Float(u) - cx) * z / fx
+                let y = (Float(v) - cy) * z / fy
+                let zc = -z
+                let wx = m.columns.0.x * x + m.columns.1.x * y + m.columns.2.x * zc + m.columns.3.x
+                let wy = m.columns.0.y * x + m.columns.1.y * y + m.columns.2.y * zc + m.columns.3.y
+                let wz = m.columns.0.z * x + m.columns.1.z * y + m.columns.2.z * zc + m.columns.3.z
+                fresh.append(SIMD3<Float>(wx, wy, wz))
+            }
+        }
+        cloudLock.lock()
+        cloudPoints.append(contentsOf: fresh)
+        if cloudPoints.count > maxCloudPoints {
+            cloudPoints.removeFirst(cloudPoints.count - maxCloudPoints)
+        }
+        let count = cloudPoints.count
+        cloudLock.unlock()
+        if ts - lastCloudPush > 0.3 {
+            lastCloudPush = ts
+            let snapshot = snapshotCloud()
+            DispatchQueue.main.async { [weak self] in
+                self?.rebuildCloudNode(points: snapshot)
+                var s = self?.lastStats ?? Stats()
+                s.cloudPoints = count
+                self?.lastStats = s
+            }
+        }
+    }
+
+    private func snapshotCloud() -> [SIMD3<Float>] {
+        cloudLock.lock()
+        defer { cloudLock.unlock() }
+        return cloudPoints
+    }
+
+    private func cloudPointCount() -> Int {
+        cloudLock.lock()
+        defer { cloudLock.unlock() }
+        return cloudPoints.count
+    }
+
+    private func rebuildCloudNode(points: [SIMD3<Float>]) {
+        guard !points.isEmpty else { return }
+        var vertices: [SCNVector3] = []
+        vertices.reserveCapacity(points.count)
+        for p in points { vertices.append(SCNVector3(p.x, p.y, p.z)) }
+        let source = SCNGeometrySource(vertices: vertices)
+        var indices: [Int32] = Array(0..<Int32(vertices.count))
+        let idxData = Data(bytes: &indices, count: indices.count * MemoryLayout<Int32>.size)
+        let element = SCNGeometryElement(data: idxData, primitiveType: .point,
+                                         primitiveCount: vertices.count, bytesPerIndex: MemoryLayout<Int32>.size)
+        element.pointSize = 2.0
+        element.minimumPointScreenSpaceRadius = 1.0
+        element.maximumPointScreenSpaceRadius = 3.0
+        let geo = SCNGeometry(sources: [source], elements: [element])
+        cloudNode.geometry = geo
     }
 
     // MARK: - Video
@@ -299,14 +456,6 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
         }
     }
 
-    private static func writeDepth(_ pb: CVPixelBuffer, to url: URL) {
-        writeRaw(pb, to: url)
-    }
-
-    private static func writeConf(_ pb: CVPixelBuffer, to url: URL) {
-        writeRaw(pb, to: url)
-    }
-
     private static func writeRaw(_ pb: CVPixelBuffer, to url: URL) {
         CVPixelBufferLockBaseAddress(pb, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
@@ -317,12 +466,13 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
         FileManager.default.createFile(atPath: url.path, contents: nil)
         guard let out = try? FileHandle(forWritingTo: url) else { return }
         defer { try? out.close() }
-        if bpr == w * MemoryLayout<UInt8>.size || bpr == w * 4 {
-            out.write(Data(bytes: base, count: w * h * (bpr / w)))
+        let rowBytes = min(bpr, w * 4)
+        if bpr == w * 4 {
+            out.write(Data(bytes: base, count: w * h * 4))
         } else {
             let p = base.assumingMemoryBound(to: UInt8.self)
             for row in 0..<h {
-                out.write(Data(bytes: p + row * bpr, count: min(w * 4, bpr)))
+                out.write(Data(bytes: p + row * bpr, count: rowBytes))
             }
         }
     }
@@ -352,9 +502,10 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
 
     private func writeMeta(duration: Double) {
         guard let dir = sessionDir else { return }
+        let total = tqNormal + tqExcessive + tqFeatures + tqReloc + tqInit + tqNA
         let device = "\(UIDevice.current.model) iOS \(UIDevice.current.systemVersion)"
         let meta: [String: Any] = [
-            "format": "sessioncam-v2",
+            "format": "sessioncam-v3",
             "session": dir.lastPathComponent,
             "ort": ort,
             "zimmer": zimmer,
@@ -367,7 +518,21 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
             "pathLengthMeters": pathLength,
             "durationSeconds": duration,
             "videoOrientation": "sensorLandscape",
-            "depthFormat": "float32-le raw (.f32) + confidence uint8 (.conf), dims in poses.jsonl"
+            "depthFormat": "float32-le raw (.f32) + confidence uint8 (.conf), dims in poses.jsonl",
+            "trackingQuality": [
+                "total": total,
+                "normal": tqNormal,
+                "excessiveMotion": tqExcessive,
+                "insufficientFeatures": tqFeatures,
+                "relocalizing": tqReloc,
+                "initializing": tqInit,
+                "notAvailable": tqNA,
+                "normalPct": total > 0 ? Double(tqNormal) / Double(total) * 100.0 : -1
+            ],
+            "protocol": [
+                "done": checklist.active,
+                "loopAutoSuggested": checklist.loopSuggested
+            ]
         ]
         let url = dir.appendingPathComponent("meta.json")
         if let data = try? JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted, .sortedKeys]) {

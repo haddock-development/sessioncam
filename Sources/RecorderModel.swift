@@ -1,11 +1,11 @@
 import Foundation
 import SwiftUI
-import ZIPFoundation
 
 final class RecorderModel: ObservableObject {
     @Published var ort = ""
     @Published var zimmer = ""
     @Published var stats = ARKitRecorder.Stats()
+    @Published var checklist = ARKitRecorder.Checklist()
     @Published var shareURL: URL?
     @Published var zipping = false
 
@@ -13,11 +13,11 @@ final class RecorderModel: ObservableObject {
     private var timer: Timer?
 
     init() {
-        // Vorschau-Session ab App-Start laufen lassen
         recorder.runPreview()
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.stats = self.recorder.currentStats
+            self.checklist = self.recorder.currentChecklist
         }
     }
 
@@ -27,13 +27,11 @@ final class RecorderModel: ObservableObject {
         recorder.start(ort: ort, zimmer: zimmer) { _ in }
     }
 
+    func tick(_ item: String) { recorder.tick(item) }
     func pause() { recorder.pause() }
     func resume() { recorder.resume() }
-
     func stop() {
         recorder.stop()
         stats = recorder.currentStats
     }
-
-    func reloadSessions() {}
 }
