@@ -1,0 +1,36 @@
+name: SessionCam
+options:
+  bundleIdPrefix: de.indoorcapture
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation
+    from: "0.9.19"
+targets:
+  SessionCam:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    dependencies:
+      - package: ZIPFoundation
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: SessionCam
+        NSCameraUsageDescription: "SessionCam nimmt Kamera und LiDAR fuer 3D-Sessions auf."
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UILaunchScreen: {}
+    settings:
+      base:
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+schemes:
+  SessionCam:
+    build:
+      targets:
+        SessionCam: all
