@@ -6,13 +6,18 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect ObjectCaptureSession interface
+      - name: Find ObjectCaptureSession across SDK
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          F=$(find "$SDK/System/Library/Frameworks/RealityKit.framework" -name "*.swiftinterface" | head -1)
-          echo "FILE: $F"
-          grep -nE "class ObjectCaptureSession|var state|func start|func finish|func startDetecting|func startCapturing|func stop|enum Status|struct Status" "$F" | head -40
-          echo "--- Status enum cases ---"
-          awk '/enum Status.*:/,/^    }/' "$F" | head -40
-          echo "--- delegate? ---"
-          grep -nE "ObjectCaptureSessionDelegate|protocol.*Delegate" "$F" | head -10
+          FOUND=0
+          for F in $(find "$SDK/System/Library/Frameworks" -name "*.swiftinterface" 2>/dev/null); do
+            if grep -q "class ObjectCaptureSession" "$F" 2>/dev/null; then
+              echo "FOUND IN: $F"
+              grep -nE "class ObjectCaptureSession|public var state|public func start|public func finish|public func startDetecting|public func startCapturing|enum Status|Status \{|public var delegate|ObjectCaptureSessionDelegate" "$F" | head -30
+              echo "--- Status cases ---"
+              grep -nE "case (initializing|ready|detecting|capturing|finishing|completed|failed)" "$F" | head -12
+              FOUND=1
+            fi
+          done
+          [ "$FOUND" = "0" ] && echo "nirgends gefunden - grep ObjC Headers:"
+          grep -rn "ObjectCaptureSession" "$SDK/System/Library/Frameworks" --include="*.h" 2>/dev/null | head -5
