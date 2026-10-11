@@ -48,6 +48,7 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
     private let cloudLock = NSLock()
     private let motion = CMMotionManager()
     private let motionQueue = OperationQueue()
+    private var previewRunning = false
 
     let arSession = ARSession()
     let cloudNode = SCNNode()
