@@ -1,5 +1,4 @@
-import ObjectCapture
-import Photogrammetry
+import RealityKit
 import SwiftUI
 
 /// WP3: Object Capture on-device (iOS 17) - aus Video-Scan wird USDZ-Mesh
