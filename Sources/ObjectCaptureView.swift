@@ -37,7 +37,7 @@ final class ObjectCaptureModel: ObservableObject {
         case .completed:
             stateText = "ERFASST - Rekonstruktion laeuft"
             if !reconstructed { reconstructed = true; reconstruct() }
-        case .failed(let error): stateText = "FEHLER: \(error.localizedDescription)"
+        case .failed: stateText = "FEHLER"
         @unknown default: break
         }
     }
