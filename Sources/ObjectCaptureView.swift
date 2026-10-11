@@ -2,6 +2,7 @@ import RealityKit
 import SwiftUI
 
 /// WP3: Object Capture on-device (iOS 17) - Scan -> USDZ-Mesh, Realitaet-API-Flow
+@MainActor
 final class ObjectCaptureModel: ObservableObject, ObjectCaptureSessionDelegate {
     let session = ObjectCaptureSession()
     @Published var stateText = "IDLE"
@@ -22,7 +23,7 @@ final class ObjectCaptureModel: ObservableObject, ObjectCaptureSessionDelegate {
         stateText = "INITIALISIERE"
     }
 
-    func objectCaptureSession(_ session: ObjectCaptureSession, didUpdate state: ObjectCaptureSession.Status) {
+    nonisolated func objectCaptureSession(_ session: ObjectCaptureSession, didUpdate state: ObjectCaptureSession.Status) {
         DispatchQueue.main.async {
             switch state {
             case .initializing: self.stateText = "INITIALISIERE..."
