@@ -256,7 +256,7 @@ final class ARKitRecorder: NSObject, ARSessionDelegate {
 
     private func sanitize(_ s: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
-        return s.components(separatedBy: allowed.complemented()).joined(separator: "").uppercased()
+        return s.components(separatedBy: allowed.inverted).joined(separator: "").uppercased()
     }
 
     private func writeMeta(duration: Double) {
