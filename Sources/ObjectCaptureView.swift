@@ -1,14 +1,16 @@
 import RealityKit
 import SwiftUI
 
-/// WP3: Object Capture on-device (iOS 17) - Scan -> USDZ-Mesh, Realitaet-API-Flow
+/// WP3: Object Capture on-device (iOS 17) - Scan -> USDZ-Mesh (RealityKit-API, polling)
 @MainActor
-final class ObjectCaptureModel: ObservableObject, ObjectCaptureSessionDelegate {
+final class ObjectCaptureModel: ObservableObject {
     let session = ObjectCaptureSession()
     @Published var stateText = "IDLE"
     @Published var modelURL: URL?
     @Published var sessionRunning = false
     private var dir: URL?
+    private var reconstructed = false
+    private var timer: Timer?
 
     func start() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -17,47 +19,56 @@ final class ObjectCaptureModel: ObservableObject, ObjectCaptureSessionDelegate {
         let d = docs.appendingPathComponent("mesh_\(df.string(from: Date()))")
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         dir = d
-        session.delegate = self
         session.start(imagesDirectory: d)
         sessionRunning = true
         stateText = "INITIALISIERE"
-    }
-
-    nonisolated func objectCaptureSession(_ session: ObjectCaptureSession, didUpdate state: ObjectCaptureSession.Status) {
-        DispatchQueue.main.async {
-            switch state {
-            case .initializing: self.stateText = "INITIALISIERE..."
-            case .ready: self.stateText = "BEREIT - Weiter fuer Objekt-Erkennung"
-            case .detecting: self.stateText = "OBJEKT ERKENNEN"
-            case .capturing: self.stateText = "ERFASSE... Objekt umkreisen"
-            case .finishing: self.stateText = "ABSCHLIESSEN..."
-            case .completed: self.stateText = "ERFASST - Rekonstruktion laeuft"
-            case .failed(let error): self.stateText = "FEHLER: \(error.localizedDescription)"
-            @unknown default: self.stateText = "?"
-            }
-            if case .completed = state { self.reconstruct() }
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.poll()
         }
     }
 
-    func startCapturing() { session.startCapturing() }
+    private func poll() {
+        switch session.state {
+        case .initializing: stateText = "INITIALISIERE..."
+        case .ready: stateText = "BEREIT - Weiter fuer Objekt-Erkennung"
+        case .detecting: stateText = "OBJEKT ERKENNEN"
+        case .capturing: stateText = "ERFASSE... Objekt umkreisen"
+        case .finishing: stateText = "ABSCHLIESSEN..."
+        case .completed:
+            stateText = "ERFASST - Rekonstruktion laeuft"
+            if !reconstructed { reconstructed = true; reconstruct() }
+        case .failed(let error): stateText = "FEHLER: \(error.localizedDescription)"
+        @unknown default: break
+        }
+    }
+
     func startDetecting() { _ = session.startDetecting() }
+    func startCapturing() { session.startCapturing() }
     func finishScan() { session.finish() }
 
     private func reconstruct() {
-        guard let dir else { return }
-        let out = dir.appendingPathComponent("model", conformingTo: .usdz)
-        do {
-            let pg = try PhotogrammetrySession(input: dir)
-            try pg.process(requests: [.modelFile(url: out, detail: .reduced)])
-            Task {
-                for try await output in pg.outputs {
-                    if case .processingComplete = output {
-                        DispatchQueue.main.async { self.modelURL = out; self.stateText = "FERTIG: model.usdz" }
+        guard let dir, let out = dir.children?.first(where: { $0.pathExtension == "usdz" }) ?? nil else {
+            guard let dir else { return }
+            do { try reconstructTo(dir, out: dir.appendingPathComponent("model", conformingTo: .usdz)) }
+            catch { stateText = "REKO-FEHLER: \(error.localizedDescription)" }
+            return
+        }
+        modelURL = out
+        stateText = "FERTIG: \(out.lastPathComponent)"
+    }
+
+    private func reconstructTo(_ dir: URL, out: URL) throws {
+        let pg = try PhotogrammetrySession(input: dir)
+        try pg.process(requests: [.modelFile(url: out, detail: .reduced)])
+        Task { [weak self] in
+            for try await output in pg.outputs {
+                if case .processingComplete = output {
+                    DispatchQueue.main.async {
+                        self?.modelURL = out
+                        self?.stateText = "FERTIG: \(out.lastPathComponent)"
                     }
                 }
             }
-        } catch {
-            stateText = "REKO-FEHLER: \(error.localizedDescription)"
         }
     }
 }
@@ -102,7 +113,7 @@ struct ObjectCaptureUIView: UIViewRepresentable {
         let v = UIView(frame: .zero)
         v.backgroundColor = .black
         let lbl = UILabel()
-        lbl.text = "Objekt-Scan:\nObjekt platzieren, ERKENNEN, dann CAPTURE\nund langsam umkreisen"
+        lbl.text = "Objekt-Scan:\nERKENNEN -> CAPTURE -> langsam umkreisen -> FERTIG"
         lbl.textColor = .white
         lbl.textAlignment = .center
         lbl.numberOfLines = 0
