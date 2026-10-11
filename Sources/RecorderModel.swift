@@ -1,5 +1,7 @@
 import Foundation
 import SwiftUI
+import RoomPlan
+import simd
 
 final class RecorderModel: ObservableObject {
     @Published var ort = ""
@@ -10,6 +12,39 @@ final class RecorderModel: ObservableObject {
     @Published var zipping = false
 
     let recorder = ARKitRecorder()
+    var roomSession: RoomCaptureSession?
+
+    func saveFloorplan(room: CapturedRoom) -> String {
+        func surf(_ s: CapturedRoom.Surface) -> [String: Any] {
+            let m = s.transform
+            let v: [Float] = [
+                m.columns.0.x, m.columns.1.x, m.columns.2.x, m.columns.3.x,
+                m.columns.0.y, m.columns.1.y, m.columns.2.y, m.columns.3.y,
+                m.columns.0.z, m.columns.1.z, m.columns.2.z, m.columns.3.z,
+                m.columns.0.w, m.columns.1.w, m.columns.2.w, m.columns.3.w]
+            return ["dimensions": [s.dimensions.x, s.dimensions.y, s.dimensions.z],
+                    "transform": v, "confidence": s.confidence.rawValue]
+        }
+        let json: [String: Any] = [
+            "format": "floorplan-v1",
+            "createdAt": ISO8601DateFormatter().string(from: Date()),
+            "walls": room.walls.map(surf),
+            "doors": room.doors.map(surf),
+            "windows": room.windows.map(surf),
+            "openings": room.openings.map(surf),
+            "objects": room.objects.map { o -> [String: Any] in
+                var d = surf(o); d["category"] = "\(o.category)"; return d
+            }
+        ]
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let sessionsDir = docs.appendingPathComponent("sessions", isDirectory: true)
+        let items = (try? FileManager.default.contentsOfDirectory(at: sessionsDir, includingPropertiesForKeys: [.isDirectoryKey], options: []))?.filter { $0.hasDirectoryPath && !$0.lastPathComponent.hasSuffix(".zip") }.sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
+        guard let newest = items.last else { return "Keine Session vorhanden - erst aufnehmen" }
+        let url = newest.appendingPathComponent("floorplan.json")
+        guard let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) else { return "Serialisierung fehlgeschlagen" }
+        do { try data.write(to: url); return "Gespeichert: \(url.lastPathComponent)" }
+        catch { return "Fehler: \(error.localizedDescription)" }
+    }
     private var timer: Timer?
 
     init() {

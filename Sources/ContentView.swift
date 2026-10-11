@@ -12,6 +12,14 @@ struct ContentView: View {
                 SessionListView(shareURL: $model.shareURL)
             }
             .tabItem { Label("Sessions", systemImage: "list.bullet") }
+            NavigationView {
+                RoomPlanScreen(model: model)
+            }
+            .tabItem { Label("Grundriss", systemImage: "floorplan") }
+            NavigationView {
+                ObjectCaptureScreen()
+            }
+            .tabItem { Label("3D-Mesh", systemImage: "cube") }
         }
     }
 
