@@ -24,14 +24,13 @@ final class RecorderModel: ObservableObject {
             return d
         }
         func genericSurf(_ dims: simd_float3, _ m: simd_float4x4, conf: Int) -> [String: Any] {
-            let m = m
-            let v: [Float] = [
+                        let v: [Float] = [
                 m.columns.0.x, m.columns.1.x, m.columns.2.x, m.columns.3.x,
                 m.columns.0.y, m.columns.1.y, m.columns.2.y, m.columns.3.y,
                 m.columns.0.z, m.columns.1.z, m.columns.2.z, m.columns.3.z,
                 m.columns.0.w, m.columns.1.w, m.columns.2.w, m.columns.3.w]
-            return ["dimensions": [s.dimensions.x, s.dimensions.y, s.dimensions.z],
-                    "transform": v, "confidence": s.confidence.rawValue]
+            return ["dimensions": [dims.x, dims.y, dims.z],
+                    "transform": v, "confidence": conf]
         }
         let json: [String: Any] = [
             "format": "floorplan-v1",
@@ -40,9 +39,7 @@ final class RecorderModel: ObservableObject {
             "doors": room.doors.map(surf),
             "windows": room.windows.map(surf),
             "openings": room.openings.map(surf),
-            "objects": room.objects.map { o -> [String: Any] in
-                var d = surf(o); d["category"] = "\(o.category)"; return d
-            }
+            "objects": room.objects.map { surfObj($0) }
         ]
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let sessionsDir = docs.appendingPathComponent("sessions", isDirectory: true)

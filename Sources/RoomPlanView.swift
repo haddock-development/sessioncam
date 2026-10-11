@@ -7,17 +7,16 @@ struct RoomCaptureUIView: UIViewRepresentable {
     @Binding var scanning: Bool
     @Binding var stopRequested: Bool
 
-    func makeUIView(context: Context) -> RoomCaptureView {
+    func makeUIView(context: Context) -> UIView {
         let view = RoomCaptureView(frame: .zero)
         let session = view.session
         context.coordinator.session = session
         session.delegate = context.coordinator
-        context.coordinator.captureView = view
         session.run(configuration: context.coordinator.config)
         return view
     }
 
-    func updateUIView(_ uiView: RoomCaptureView, context: Context) {
+    func updateUIView(_ uiView: UIView, context: Context) {
         if stopRequested && !context.coordinator.stopped {
             context.coordinator.stopped = true
             context.coordinator.session?.stop()
@@ -29,7 +28,7 @@ struct RoomCaptureUIView: UIViewRepresentable {
     final class Coordinator: NSObject, RoomCaptureSessionDelegate {
         let config = RoomCaptureSession.Configuration()
         weak var session: RoomCaptureSession?
-        weak var captureView: RoomCaptureView?
+        weak var session: RoomCaptureSession?
         var stopped = false
         var parent: RoomCaptureUIView
 
