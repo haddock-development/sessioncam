@@ -23,7 +23,9 @@ final class ObjectCaptureModel: ObservableObject {
         sessionRunning = true
         stateText = "INITIALISIERE"
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.poll()
+            MainActor.assumeIsolated {
+                self?.poll()
+            }
         }
     }
 
