@@ -49,14 +49,19 @@ final class ObjectCaptureModel: ObservableObject {
     func finishScan() { session.finish() }
 
     private func reconstruct() {
-        guard let dir, let out = dir.children?.first(where: { $0.pathExtension == "usdz" }) ?? nil else {
-            guard let dir else { return }
-            do { try reconstructTo(dir, out: dir.appendingPathComponent("model", conformingTo: .usdz)) }
-            catch { stateText = "REKO-FEHLER: \(error.localizedDescription)" }
+        guard let dir else { return }
+        let existing = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
+            .filter { $0.pathExtension == "usdz" }.first
+        if let out = existing {
+            modelURL = out
+            stateText = "FERTIG: \(out.lastPathComponent)"
             return
         }
-        modelURL = out
-        stateText = "FERTIG: \(out.lastPathComponent)"
+        do {
+            try reconstructTo(dir, out: dir.appendingPathComponent("model", conformingTo: .usdz))
+        } catch {
+            stateText = "REKO-FEHLER: \(error.localizedDescription)"
+        }
     }
 
     private func reconstructTo(_ dir: URL, out: URL) throws {
