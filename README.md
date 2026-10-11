@@ -40,5 +40,6 @@ Pipeline: scripts/import_sessioncam.py -> cosmos_layout -> qc_report.py.
 ## Roadmap
 
 - [x] Phase 1: Recording in Pipeline-Format
-- [ ] Phase 2: Live-QC-Gates (rotes Overlay > 1,2 m/s, Loop-Erinnerung, Coverage)
-- [ ] Phase 3: RoomPlan-Grundriss + Web-Viewer (ersetzt Polycam/magicplan)
+- [x] Phase 2: Live-Kamera-Vorschau, Tracking-Badge, Loop-Gap live, Pause/Resume, Raw-IMU, Confidence-Map, Session-Manager
+- [ ] Phase 3: Live-QC-Gates (rotes Overlay > 1,2 m/s, Loop-Erinnerung, Coverage)
+- [ ] Phase 4: RoomPlan-Grundriss + Web-Viewer (ersetzt Polycam/magicplan)
